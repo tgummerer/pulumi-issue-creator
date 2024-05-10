@@ -1,0 +1,7 @@
+name: pulumi-issue-creator
+runtime: go
+description: Create issues from the command line using pulumi
+config:
+  pulumi:tags:
+    value:
+      pulumi:template: go
