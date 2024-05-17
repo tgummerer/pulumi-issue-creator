@@ -2,16 +2,29 @@ package main
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 
 	"github.com/pulumi/pulumi-github/sdk/v6/go/github"
 	"github.com/pulumi/pulumi/sdk/v3/go/pulumi"
 )
 
+type IssueFromFile struct {
+	Title            string
+	DescriptionPath  string
+	Assignees        []string
+	AdditionalLabels []string
+}
+
 type Issue struct {
-	Title         string
-	Description   string
-	URL           pulumi.StringOutput
-	NoCreateIssue bool
+	Title            string
+	Description      string
+	Assignees        []string
+	URL              pulumi.StringOutput
+	NoCreateIssue    bool
+	AdditionalText   string
+	Done             bool
+	AdditionalLabels []string
 }
 
 type Section struct {
@@ -23,8 +36,30 @@ type Section struct {
 type EpicIssue struct {
 	Title         string
 	Description   string
+	Assignees     []string
 	RelatedIssues []int
 	Sections      []*Section
+}
+
+func createFlakyTestIssue(ctx *pulumi.Context, repo *github.Repository, issue *IssueFromFile) {
+	description, err := os.ReadFile(filepath.Join("issue-texts", issue.DescriptionPath))
+	if err != nil {
+		fmt.Println("Error reading file", err)
+		return
+	}
+	labels := pulumi.ToStringArray(
+		append(issue.AdditionalLabels, "kind/engineering", "impact/flaky-test"))
+	_, err = github.NewIssue(ctx, issue.Title, &github.IssueArgs{
+		Repository: repo.Name,
+		Title:      pulumi.String(fmt.Sprintf("`%s` is flaky", issue.Title)),
+		Body:       pulumi.String(description),
+		Assignees:  pulumi.ToStringArray(issue.Assignees),
+		Labels:     labels,
+	})
+	if err != nil {
+		fmt.Println("Error creating issue", err)
+		return
+	}
 }
 
 func createIssue(ctx *pulumi.Context, repo *github.Repository, issue *Issue) {
@@ -32,6 +67,7 @@ func createIssue(ctx *pulumi.Context, repo *github.Repository, issue *Issue) {
 		Repository: repo.Name,
 		Title:      pulumi.String(issue.Title),
 		Body:       pulumi.String(issue.Description),
+		Assignees:  pulumi.ToStringArray(issue.Assignees),
 		Labels: pulumi.StringArray{
 			pulumi.String("kind/task"),
 		},
@@ -41,6 +77,23 @@ func createIssue(ctx *pulumi.Context, repo *github.Repository, issue *Issue) {
 		return
 	}
 	issue.URL = pulumi.Sprintf("https://github.com/pulumi/pulumi/issues/%d", i.Number)
+}
+
+func createWorkItem(ctx *pulumi.Context, repo *github.Repository, issue *Issue) {
+	labels := pulumi.ToStringArray(
+		append(issue.AdditionalLabels, "kind/engineering"),
+	)
+	_, err := github.NewIssue(ctx, issue.Title, &github.IssueArgs{
+		Repository: repo.Name,
+		Title:      pulumi.String(issue.Title),
+		Body:       pulumi.String(issue.Description),
+		Assignees:  pulumi.ToStringArray(issue.Assignees),
+		Labels:     labels,
+	})
+	if err != nil {
+		fmt.Println("Error creating issue", err)
+		return
+	}
 }
 
 func generateDescription(epic *EpicIssue) pulumi.StringOutput {
@@ -55,20 +108,34 @@ func generateDescription(epic *EpicIssue) pulumi.StringOutput {
 	for _, section := range epic.Sections {
 		description = pulumi.Sprintf("%s\n\n## %s", description, section.Title)
 		for _, issue := range section.Issues {
+			check := " "
+			if issue.Done {
+				check = "x"
+			}
 			if issue.NoCreateIssue {
-				description = pulumi.Sprintf("%s\n- [ ] %s", description, issue.Title)
+				description = pulumi.Sprintf("%s\n- [%s] %s", description, check, issue.Title)
 			} else {
-				description = pulumi.Sprintf("%s\n- [ ] %s", description, issue.URL)
+				description = pulumi.Sprintf("%s\n- [%s] %s", description, check, issue.URL)
+			}
+			if issue.AdditionalText != "" {
+				description = pulumi.Sprintf("%s (%s)", description, issue.AdditionalText)
 			}
 		}
 
 		for _, subSection := range section.SubSections {
 			description = pulumi.Sprintf("%s\n\n### %s", description, subSection.Title)
 			for _, issue := range subSection.Issues {
+				check := " "
+				if issue.Done {
+					check = "x"
+				}
 				if issue.NoCreateIssue {
-					description = pulumi.Sprintf("%s\n- [ ] %s", description, issue.Title)
+					description = pulumi.Sprintf("%s\n- [%s] %s", description, check, issue.Title)
 				} else {
-					description = pulumi.Sprintf("%s\n- [ ] %s", description, issue.URL)
+					description = pulumi.Sprintf("%s\n- [%s] %s", description, check, issue.URL)
+				}
+				if issue.AdditionalText != "" {
+					description = pulumi.Sprintf("%s (%s)", description, issue.AdditionalText)
 				}
 			}
 		}
@@ -101,6 +168,7 @@ func createEpicIssue(ctx *pulumi.Context, repo *github.Repository, epic *EpicIss
 		Repository: repo.Name,
 		Title:      pulumi.String("[Epic] " + epic.Title),
 		Body:       description,
+		Assignees:  pulumi.ToStringArray(epic.Assignees),
 		Labels: pulumi.StringArray{
 			pulumi.String("kind/epic"),
 		},
@@ -169,14 +237,17 @@ There is currently no way to set up a default provider for all the resources in 
 
 This issue is to track the work to allow users to programmatically set up a default provider for all the resources a provider supports.
 `,
+			Assignees:     []string{"tgummerer"},
 			RelatedIssues: []int{2059},
 			Sections: []*Section{
 				{
 					Title: "Design (M103)",
 					Issues: []*Issue{
 						{
-							Title:         "Write design doc for programmatic default providers",
-							NoCreateIssue: true,
+							Title:          "Write design doc for programmatic default providers",
+							NoCreateIssue:  true,
+							AdditionalText: "https://docs.google.com/document/d/12AhuLGpK-hV5f0Zv0PqO9JwxuiRJm5xjQk2YkWYJKuk/edit",
+							Done:           true,
 						},
 					},
 				},
@@ -187,10 +258,12 @@ This issue is to track the work to allow users to programmatically set up a defa
 							Title: "M104",
 							Issues: []*Issue{
 								{
-									Title: "Engine support for programmatic default providers",
+									Title:          "Engine support for programmatic default providers",
+									AdditionalText: "[WIP PR](https://github.com/pulumi/pulumi/pull/16105)",
 								},
 								{
-									Title: "Go SDK support for programmatic default providers",
+									Title:          "Go SDK support for programmatic default providers",
+									AdditionalText: "[WIP PR](https://github.com/pulumi/pulumi/pull/16105)",
 								},
 								{
 									Title: "Node SDK support for programmatic default providers",
@@ -237,6 +310,20 @@ This issue is to track the work to allow users to programmatically set up a defa
 		}
 
 		createEpicIssue(ctx, repo, epicIssue)
+
+		pulumiDotnetIssue := &Issue{
+			Title:            "Stop hardcoding the dotnet SDK version number in tests",
+			Description:      "We currently hardcode the version of the dotnet SDK in tests.  This breaks everytime we forget to bump this after a new dotnet SDK release.  We should try to stop hardcoding this, so we don't have issues with the merge queue being blocked every time we do a release and one of the providers requires the new version.",
+			AdditionalLabels: []string{"area/testing", "area/codegen"},
+		}
+		createWorkItem(ctx, repo, pulumiDotnetIssue)
+
+		goTransformationFlaky := &IssueFromFile{
+			Title:           "TestGoTransformations/go/simple",
+			DescriptionPath: "TestGoTransformations.md",
+		}
+		createFlakyTestIssue(ctx, repo, goTransformationFlaky)
+
 		return nil
 	})
 }
